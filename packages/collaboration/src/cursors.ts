@@ -128,9 +128,12 @@ const remoteSelectionTheme = EditorView.baseTheme({
     display: 'flex',
     alignItems: 'center',
     gap: '4px',
+    maxWidth: '140px',
     padding: '2px 6px 2px 2px',
+    background: 'var(--jp-layout-color1)',
+    color: 'var(--jp-ui-font-color1)',
+    border: '1px solid',
     borderRadius: '10px',
-    color: 'var(--jp-ui-inverse-font-color1)',
     fontSize: '11px',
     lineHeight: '1.2',
     whiteSpace: 'nowrap',
@@ -155,14 +158,18 @@ const remoteSelectionTheme = EditorView.baseTheme({
     justifyContent: 'center',
     overflow: 'hidden',
     borderRadius: '100%',
-    background: 'var(--jp-layout-color1)',
-    fontSize: '8px',
-    fontWeight: 'bold'
+    color: 'var(--jp-ui-inverse-font-color1)',
+    fontSize: '8px'
   },
   '.jp-remote-userFlag-avatar img': {
     width: '100%',
     height: '100%',
     objectFit: 'cover'
+  },
+  '.jp-remote-userFlag-name': {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap'
   }
 });
 
@@ -236,24 +243,26 @@ function trackRemoteEdits(awareness: Awareness, ydoc: Doc): void {
 function collaboratorPill(user: User.IIdentity | undefined): HTMLDivElement {
   const dom = document.createElement('div');
   dom.className = 'jp-remote-userFlag';
-  dom.style.backgroundColor = user?.color ?? 'darkgrey';
+  dom.style.borderColor = user?.color ?? 'darkgrey';
 
   const avatar = document.createElement('div');
   avatar.className = 'jp-remote-userFlag-avatar';
-  avatar.style.color = user?.color ?? 'darkgrey';
   if (user?.avatar_url) {
     const img = document.createElement('img');
     img.src = user.avatar_url;
     img.alt = '';
     img.onerror = () => {
+      avatar.style.backgroundColor = user.color ?? 'darkgrey';
       avatar.textContent = user.initials ?? '';
     };
     avatar.appendChild(img);
   } else {
+    avatar.style.backgroundColor = user?.color ?? 'darkgrey';
     avatar.textContent = user?.initials ?? '';
   }
 
   const name = document.createElement('span');
+  name.className = 'jp-remote-userFlag-name';
   name.textContent = user?.display_name ?? 'Anonymous';
   dom.append(avatar, name);
   return dom;
