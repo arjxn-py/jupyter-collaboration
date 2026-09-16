@@ -4,8 +4,10 @@
 import {
   Annotation,
   EditorSelection,
+  EditorState,
   Extension,
-  Facet
+  Facet,
+  StateField
 } from '@codemirror/state';
 import {
   EditorView,
@@ -13,7 +15,10 @@ import {
   layer,
   LayerMarker,
   RectangleMarker,
+  showTooltip,
+  Tooltip,
   tooltips,
+  TooltipView,
   ViewPlugin,
   ViewUpdate
 } from '@codemirror/view';
@@ -24,8 +29,10 @@ import {
   createAbsolutePositionFromRelativePosition,
   createRelativePositionFromJSON,
   createRelativePositionFromTypeIndex,
+  Doc,
   RelativePosition,
-  Text
+  Text,
+  Transaction
 } from 'yjs';
 
 /*
@@ -105,7 +112,8 @@ export const editorAwarenessFacet = Facet.define<
 const remoteSelectionTheme = EditorView.baseTheme({
   '.jp-remote-cursor': {
     borderLeft: '1px solid black',
-    marginLeft: '-1px'
+    marginLeft: '-1px',
+    pointerEvents: 'none'
   },
   '.jp-remote-cursor.jp-mod-primary': {
     borderLeftWidth: '2px'
@@ -116,14 +124,205 @@ const remoteSelectionTheme = EditorView.baseTheme({
   '.cm-tooltip': {
     border: 'none'
   },
-  '.cm-tooltip .jp-remote-userInfo': {
-    color: 'var(--jp-ui-inverse-font-color0)',
-    padding: '0px 2px'
+  '.jp-remote-userFlag': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '2px 6px 2px 2px',
+    borderRadius: '10px',
+    color: 'var(--jp-ui-inverse-font-color1)',
+    fontSize: '11px',
+    lineHeight: '1.2',
+    whiteSpace: 'nowrap',
+    boxShadow: 'var(--jp-elevation-z2)',
+    pointerEvents: 'none',
+    userSelect: 'none',
+    opacity: '1',
+    transition: 'opacity 300ms ease'
+  },
+  '.jp-remote-userFlag.jp-mod-idle': {
+    opacity: '0'
+  },
+  '.cm-tooltip.jp-remote-userFlag-host': {
+    background: 'none'
+  },
+  '.jp-remote-userFlag-avatar': {
+    width: '16px',
+    height: '16px',
+    flex: '0 0 auto',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    borderRadius: '100%',
+    background: 'var(--jp-layout-color1)',
+    fontSize: '8px',
+    fontWeight: 'bold'
+  },
+  '.jp-remote-userFlag-avatar img': {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover'
   }
 });
 
 // TODO fix which user needs update
 const remoteSelectionsAnnotation = Annotation.define();
+
+/**
+ * How long a collaborator flag stays visible after their last edit.
+ */
+const FLAG_IDLE_MS = 2000;
+
+/**
+ * CodeMirror matches tooltips by `create` identity, so keep one per client.
+ */
+type Collaborator = { at: number; create?: () => TooltipView };
+
+const collaborators = new WeakMap<Awareness, Map<number, Collaborator>>();
+
+function collaborator(awareness: Awareness, clientID: number): Collaborator {
+  let byClient = collaborators.get(awareness);
+  if (!byClient) {
+    byClient = new Map();
+    collaborators.set(awareness, byClient);
+  }
+  let entry = byClient.get(clientID);
+  if (!entry) {
+    entry = { at: 0 };
+    byClient.set(clientID, entry);
+  }
+  return entry;
+}
+
+function markActive(awareness: Awareness, clientIDs: Iterable<number>): void {
+  const now = Date.now();
+  for (const clientID of clientIDs) {
+    collaborator(awareness, clientID).at = now;
+  }
+}
+
+function isFlagVisible(awareness: Awareness, clientID: number): boolean {
+  return Date.now() - collaborator(awareness, clientID).at < FLAG_IDLE_MS;
+}
+
+const editTrackedDocs = new WeakSet<Doc>();
+
+/**
+ * Mark edit authors from the Yjs clocks; awareness misses end-of-line typing.
+ */
+function trackRemoteEdits(awareness: Awareness, ydoc: Doc): void {
+  if (editTrackedDocs.has(ydoc)) {
+    return;
+  }
+  editTrackedDocs.add(ydoc);
+  // Before the observers, so the flag is up when the edit reaches the editor.
+  ydoc.on('beforeObserverCalls', (tr: Transaction) => {
+    const authors: number[] = [];
+    tr.afterState.forEach((clock, clientID) => {
+      if (
+        clientID !== ydoc.clientID &&
+        tr.beforeState.get(clientID) !== clock
+      ) {
+        authors.push(clientID);
+      }
+    });
+    if (authors.length > 0) {
+      markActive(awareness, authors);
+    }
+  });
+}
+
+function collaboratorPill(user: User.IIdentity | undefined): HTMLDivElement {
+  const dom = document.createElement('div');
+  dom.className = 'jp-remote-userFlag';
+  dom.style.backgroundColor = user?.color ?? 'darkgrey';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'jp-remote-userFlag-avatar';
+  avatar.style.color = user?.color ?? 'darkgrey';
+  if (user?.avatar_url) {
+    const img = document.createElement('img');
+    img.src = user.avatar_url;
+    img.alt = '';
+    img.onerror = () => {
+      avatar.textContent = user.initials ?? '';
+    };
+    avatar.appendChild(img);
+  } else {
+    avatar.textContent = user?.initials ?? '';
+  }
+
+  const name = document.createElement('span');
+  name.textContent = user?.display_name ?? 'Anonymous';
+  dom.append(avatar, name);
+  return dom;
+}
+
+function drawFlag(
+  awareness: Awareness,
+  clientID: number,
+  user: User.IIdentity | undefined
+): TooltipView {
+  const dom = collaboratorPill(user);
+  const sync = () =>
+    dom.classList.toggle('jp-mod-idle', !isFlagVisible(awareness, clientID));
+  sync();
+  return { dom, update: sync };
+}
+
+function flagCreator(
+  awareness: Awareness,
+  clientID: number,
+  user: User.IIdentity | undefined
+): () => TooltipView {
+  const entry = collaborator(awareness, clientID);
+  return (entry.create ??= () => drawFlag(awareness, clientID, user));
+}
+
+function collaboratorFlags(state: EditorState): readonly Tooltip[] {
+  const { awareness, ytext } = state.facet(editorAwarenessFacet);
+  const ydoc = ytext.doc;
+  if (!ydoc) {
+    return [];
+  }
+  const flags: Tooltip[] = [];
+  awareness.getStates().forEach((remote: IAwarenessState, clientID) => {
+    if (clientID === awareness.doc.clientID) {
+      return;
+    }
+    const cursor = remote.cursors?.find(
+      c => (c.primary ?? true) && (c.empty ?? true)
+    );
+    if (!cursor?.head) {
+      return;
+    }
+    const head = createAbsolutePositionFromRelativePosition(cursor.head, ydoc);
+    if (head?.type !== ytext) {
+      return;
+    }
+    flags.push({
+      pos: head.index,
+      above: true,
+      create: flagCreator(awareness, clientID, remote.user)
+    });
+  });
+  return flags;
+}
+
+/**
+ * Extension showing a fading name flag above each remote cursor
+ */
+const remoteCursorFlags = StateField.define<readonly Tooltip[]>({
+  create: collaboratorFlags,
+  update(flags, tr) {
+    return tr.docChanged ||
+      tr.annotation(remoteSelectionsAnnotation) !== undefined
+      ? collaboratorFlags(tr.state)
+      : flags;
+  },
+  provide: field => showTooltip.computeN([field], state => state.field(field))
+});
 
 /**
  * Wrapper around RectangleMarker to be able to set the user color for the remote cursor and selection ranges.
@@ -248,6 +447,10 @@ const userHover = hoverTooltip(
         continue;
       }
 
+      if (isFlagVisible(awareness, clientID)) {
+        continue;
+      }
+
       for (const cursor of state.cursors ?? []) {
         if (!cursor?.head) {
           continue;
@@ -265,12 +468,12 @@ const userHover = hoverTooltip(
             pos: head.index,
             above: true,
             create: () => {
-              const dom = document.createElement('div');
-              dom.classList.add('jp-remote-userInfo');
-              dom.style.backgroundColor = state.user?.color ?? 'darkgrey';
-              dom.textContent =
-                (state as IAwarenessState).user?.display_name ?? 'Anonymous';
-              return { dom };
+              const dom = collaboratorPill((state as IAwarenessState).user);
+              return {
+                dom,
+                mount: () =>
+                  dom.parentElement?.classList.add('jp-remote-userFlag-host')
+              };
             }
           };
         }
@@ -281,7 +484,7 @@ const userHover = hoverTooltip(
   },
   {
     hideOn: (tr, tooltip) => !!tr.annotation(remoteSelectionsAnnotation),
-    hoverTime: 0
+    hoverTime: 1
   }
 );
 
@@ -357,6 +560,7 @@ const showCollaborators = ViewPlugin.fromClass(
       updated: Array<any>;
       removed: Array<any>;
     }) => void;
+    _fadeTimer: ReturnType<typeof setTimeout> | undefined;
 
     constructor(view: EditorView) {
       this.editorAwareness = view.state.facet(editorAwarenessFacet);
@@ -369,13 +573,27 @@ const showCollaborators = ViewPlugin.fromClass(
         ) {
           // Trick to get the remoteCursorLayers to be updated
           view.dispatch({ annotations: [remoteSelectionsAnnotation.of([])] });
+          this.scheduleFade(view);
         }
       };
+
+      const ydoc = this.editorAwareness.ytext.doc;
+      if (ydoc) {
+        trackRemoteEdits(this.editorAwareness.awareness, ydoc);
+      }
 
       this.editorAwareness.awareness.on('change', this._listener);
     }
 
+    scheduleFade(view: EditorView): void {
+      clearTimeout(this._fadeTimer);
+      this._fadeTimer = setTimeout(() => {
+        view.dispatch({ annotations: [remoteSelectionsAnnotation.of([])] });
+      }, FLAG_IDLE_MS + 50);
+    }
+
     destroy(): void {
+      clearTimeout(this._fadeTimer);
       this.editorAwareness.awareness.off('change', this._listener);
     }
 
@@ -383,6 +601,10 @@ const showCollaborators = ViewPlugin.fromClass(
      * Communicate the current user cursor position to all remotes
      */
     update(update: ViewUpdate): void {
+      if (update.docChanged) {
+        this.scheduleFade(update.view);
+      }
+
       if (!update.docChanged && !update.selectionSet) {
         return;
       }
@@ -439,6 +661,7 @@ const showCollaborators = ViewPlugin.fromClass(
         remoteSelectionTheme,
         remoteCursorsLayer,
         remoteSelectionLayer,
+        remoteCursorFlags,
         userHover,
         // As we use relative positioning of widget, the tooltip must be positioned absolutely
         // And we attach the tooltip to the body to avoid overflow rules
