@@ -240,7 +240,15 @@ function trackRemoteEdits(awareness: Awareness, ydoc: Doc): void {
   });
 }
 
-function collaboratorPill(user: User.IIdentity | undefined): HTMLDivElement {
+/**
+ * Build the avatar and name badge shown for a collaborator.
+ *
+ * @param user The collaborator identity, if known
+ * @returns The badge element
+ */
+export function collaboratorPill(
+  user: User.IIdentity | undefined
+): HTMLDivElement {
   const dom = document.createElement('div');
   dom.className = 'jp-remote-userFlag';
   dom.style.borderColor = user?.color ?? 'darkgrey';
