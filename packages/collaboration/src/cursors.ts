@@ -489,6 +489,7 @@ const userHover = hoverTooltip(
               const dom = collaboratorPill((state as IAwarenessState).user);
               return {
                 dom,
+                overlap: true,
                 mount: () =>
                   dom.parentElement?.classList.add('jp-remote-userFlag-host')
               };
