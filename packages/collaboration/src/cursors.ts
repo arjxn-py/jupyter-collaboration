@@ -187,6 +187,7 @@ const FLAG_IDLE_MS = 2000;
 type Collaborator = {
   at: number;
   user?: User.IIdentity;
+  selecting?: boolean;
   create?: () => TooltipView;
 };
 
@@ -214,7 +215,8 @@ function markActive(awareness: Awareness, clientIDs: Iterable<number>): void {
 }
 
 function isFlagVisible(awareness: Awareness, clientID: number): boolean {
-  return Date.now() - collaborator(awareness, clientID).at < FLAG_IDLE_MS;
+  const entry = collaborator(awareness, clientID);
+  return entry.selecting || Date.now() - entry.at < FLAG_IDLE_MS;
 }
 
 const editTrackedDocs = new WeakSet<Doc>();
@@ -319,9 +321,7 @@ function collaboratorFlags(state: EditorState): readonly Tooltip[] {
     if (clientID === awareness.doc.clientID) {
       return;
     }
-    const cursor = remote.cursors?.find(
-      c => (c.primary ?? true) && (c.empty ?? true)
-    );
+    const cursor = remote.cursors?.find(c => c.primary ?? true);
     if (!cursor?.head) {
       return;
     }
@@ -329,7 +329,9 @@ function collaboratorFlags(state: EditorState): readonly Tooltip[] {
     if (head?.type !== ytext) {
       return;
     }
-    collaborator(awareness, clientID).user = remote.user;
+    const entry = collaborator(awareness, clientID);
+    entry.user = remote.user;
+    entry.selecting = !(cursor.empty ?? true);
     flags.push({
       pos: Math.min(head.index, state.doc.length),
       above: true,
