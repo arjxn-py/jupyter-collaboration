@@ -319,7 +319,7 @@ function collaboratorFlags(state: EditorState): readonly Tooltip[] {
       return;
     }
     flags.push({
-      pos: head.index,
+      pos: Math.min(head.index, state.doc.length),
       above: true,
       create: flagCreator(awareness, clientID, remote.user)
     });
@@ -480,9 +480,10 @@ const userHover = hoverTooltip(
           continue;
         }
         // Use some margin around the cursor to display the user.
-        if (head.index - 3 <= pos && pos <= head.index + 3) {
+        const index = Math.min(head.index, view.state.doc.length);
+        if (index - 3 <= pos && pos <= index + 3) {
           return {
-            pos: head.index,
+            pos: index,
             above: true,
             create: () => {
               const dom = collaboratorPill((state as IAwarenessState).user);
