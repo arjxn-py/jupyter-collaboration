@@ -184,7 +184,11 @@ const FLAG_IDLE_MS = 2000;
 /**
  * CodeMirror matches tooltips by `create` identity, so keep one per client.
  */
-type Collaborator = { at: number; create?: () => TooltipView };
+type Collaborator = {
+  at: number;
+  user?: User.IIdentity;
+  create?: () => TooltipView;
+};
 
 const collaborators = new WeakMap<Awareness, Map<number, Collaborator>>();
 
@@ -251,6 +255,12 @@ export function collaboratorPill(
 ): HTMLDivElement {
   const dom = document.createElement('div');
   dom.className = 'jp-remote-userFlag';
+  renderPill(dom, user);
+  return dom;
+}
+
+function renderPill(dom: HTMLElement, user: User.IIdentity | undefined): void {
+  dom.replaceChildren();
   dom.style.borderColor = user?.color ?? 'darkgrey';
 
   const avatar = document.createElement('div');
@@ -273,28 +283,29 @@ export function collaboratorPill(
   name.className = 'jp-remote-userFlag-name';
   name.textContent = user?.display_name ?? 'Anonymous';
   dom.append(avatar, name);
-  return dom;
 }
 
-function drawFlag(
-  awareness: Awareness,
-  clientID: number,
-  user: User.IIdentity | undefined
-): TooltipView {
-  const dom = collaboratorPill(user);
-  const sync = () =>
+function drawFlag(awareness: Awareness, clientID: number): TooltipView {
+  const entry = collaborator(awareness, clientID);
+  const dom = collaboratorPill(entry.user);
+  let shown = entry.user;
+  const sync = () => {
+    if (!JSONExt.deepEqual({ ...shown } as any, { ...entry.user } as any)) {
+      shown = entry.user;
+      renderPill(dom, shown);
+    }
     dom.classList.toggle('jp-mod-idle', !isFlagVisible(awareness, clientID));
+  };
   sync();
   return { dom, update: sync };
 }
 
 function flagCreator(
   awareness: Awareness,
-  clientID: number,
-  user: User.IIdentity | undefined
+  clientID: number
 ): () => TooltipView {
   const entry = collaborator(awareness, clientID);
-  return (entry.create ??= () => drawFlag(awareness, clientID, user));
+  return (entry.create ??= () => drawFlag(awareness, clientID));
 }
 
 function collaboratorFlags(state: EditorState): readonly Tooltip[] {
@@ -318,10 +329,11 @@ function collaboratorFlags(state: EditorState): readonly Tooltip[] {
     if (head?.type !== ytext) {
       return;
     }
+    collaborator(awareness, clientID).user = remote.user;
     flags.push({
       pos: Math.min(head.index, state.doc.length),
       above: true,
-      create: flagCreator(awareness, clientID, remote.user)
+      create: flagCreator(awareness, clientID)
     });
   });
   return flags;
