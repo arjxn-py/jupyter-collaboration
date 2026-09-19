@@ -187,7 +187,6 @@ const FLAG_IDLE_MS = 2000;
 type Collaborator = {
   at: number;
   user?: User.IIdentity;
-  selecting?: boolean;
   create?: () => TooltipView;
 };
 
@@ -215,8 +214,7 @@ function markActive(awareness: Awareness, clientIDs: Iterable<number>): void {
 }
 
 function isFlagVisible(awareness: Awareness, clientID: number): boolean {
-  const entry = collaborator(awareness, clientID);
-  return entry.selecting || Date.now() - entry.at < FLAG_IDLE_MS;
+  return Date.now() - collaborator(awareness, clientID).at < FLAG_IDLE_MS;
 }
 
 const editTrackedDocs = new WeakSet<Doc>();
@@ -329,9 +327,7 @@ function collaboratorFlags(state: EditorState): readonly Tooltip[] {
     if (head?.type !== ytext) {
       return;
     }
-    const entry = collaborator(awareness, clientID);
-    entry.user = remote.user;
-    entry.selecting = !(cursor.empty ?? true);
+    collaborator(awareness, clientID).user = remote.user;
     flags.push({
       pos: Math.min(head.index, state.doc.length),
       above: true,
@@ -598,12 +594,13 @@ const showCollaborators = ViewPlugin.fromClass(
     constructor(view: EditorView) {
       this.editorAwareness = view.state.facet(editorAwarenessFacet);
       this._listener = ({ added, updated, removed }) => {
-        const clients = added.concat(updated).concat(removed);
-        if (
-          clients.findIndex(
-            id => id !== this.editorAwareness.awareness.doc.clientID
-          ) >= 0
-        ) {
+        const { awareness } = this.editorAwareness;
+        const clients = added
+          .concat(updated)
+          .concat(removed)
+          .filter(id => id !== awareness.doc.clientID);
+        if (clients.length > 0) {
+          markActive(awareness, clients);
           // Trick to get the remoteCursorLayers to be updated
           view.dispatch({ annotations: [remoteSelectionsAnnotation.of([])] });
           this.scheduleFade(view);
