@@ -3,7 +3,8 @@
 | Distributed under the terms of the Modified BSD License.
 |---------------------------------------------------------------------------- */
 
-.jp-remote-userFlag {
+.jp-remote-userFlag,
+.cm-tooltip.jp-remote-userFlag {
   display: flex;
   align-items: center;
   gap: 4px;
